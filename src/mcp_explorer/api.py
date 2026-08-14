@@ -18,6 +18,7 @@ from .models import (
     RespondPayload,
     SessionView,
     SetModeRequest,
+    SetNameRequest,
     SetToolsRequest,
 )
 from .registry import SessionRegistry
@@ -65,6 +66,13 @@ def create_api_router(
     async def get_session(session_id: str) -> SessionView:
         state = _session_or_404(session_id)
         return state.view(len(registry.default_tools))
+
+    @router.put("/sessions/{session_id}/name", dependencies=guard)
+    async def set_name(session_id: str, body: SetNameRequest) -> dict[str, str]:
+        state = _session_or_404(session_id)
+        state.name = body.name
+        events.emit("session_updated", session_id=session_id, change="name", name=state.name)
+        return {"session_id": session_id, "name": state.name}
 
     @router.put("/sessions/{session_id}/mode", dependencies=guard)
     async def set_mode(session_id: str, body: SetModeRequest) -> dict[str, str]:

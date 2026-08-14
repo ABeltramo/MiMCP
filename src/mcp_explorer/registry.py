@@ -20,6 +20,7 @@ from .models import (
     SessionView,
     ToolDef,
 )
+from .names import name_for_index
 
 if TYPE_CHECKING:
     from mcp.server.session import ServerSession
@@ -52,6 +53,7 @@ class SessionState:
 
     session_id: str
     mode: Mode
+    name: str = ""
     client_info: dict[str, Any] | None = None
     # None => fall back to the registry's global default tools.
     tools: list[ToolDef] | None = None
@@ -65,6 +67,7 @@ class SessionState:
         tool_count = len(self.tools) if self.tools is not None else default_tool_count
         return SessionView(
             session_id=self.session_id,
+            name=self.name,
             client_info=self.client_info,
             mode=self.mode,
             tool_count=tool_count,
@@ -86,6 +89,8 @@ class SessionRegistry:
         self._lock = asyncio.Lock()
         # call_id -> session_id, so /respond can find a call without a session id.
         self._call_index: dict[str, str] = {}
+        # Monotonic counter driving human-readable session names.
+        self._name_counter = 0
 
     @property
     def lock(self) -> asyncio.Lock:
@@ -97,7 +102,12 @@ class SessionRegistry:
         """Return the session, creating it (with defaults) if unseen."""
         state = self._sessions.get(session_id)
         if state is None:
-            state = SessionState(session_id=session_id, mode=self._default_mode)
+            state = SessionState(
+                session_id=session_id,
+                mode=self._default_mode,
+                name=name_for_index(self._name_counter),
+            )
+            self._name_counter += 1
             self._sessions[session_id] = state
         return state
 

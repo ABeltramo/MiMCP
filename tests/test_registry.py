@@ -15,6 +15,15 @@ def test_default_mode_and_creation():
     assert reg.get_or_create("s1") is state
 
 
+def test_sessions_get_unique_readable_names():
+    reg = SessionRegistry()
+    names = {reg.get_or_create(f"s{i}").name for i in range(50)}
+    assert len(names) == 50  # collision-free
+    assert all("-" in n for n in names)  # adjective-animal shape
+    # Names are stable across lookups.
+    assert reg.get_or_create("s0").name == reg.get("s0").name
+
+
 def test_effective_tools_fallback_and_override():
     reg = SessionRegistry()
     reg.set_default_tools([ToolDef(name="echo")])

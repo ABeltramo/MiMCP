@@ -55,7 +55,8 @@
   .session:last-child { border-bottom: none; }
   .session:hover { background: var(--panel2); }
   .session.sel { background: var(--panel2); box-shadow: inset 3px 0 0 var(--accent); }
-  .session .id { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  .session .name { font-weight: 600; font-size: 13.5px; }
+  .session .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
   .session .meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; display: flex; gap: 10px; flex-wrap: wrap; }
 
   .pending { border: 1px solid var(--warn); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #1c1a12; }
@@ -99,6 +100,12 @@
       <h2>Controls</h2>
       <div class="body">
         <div id="selInfo" class="muted">No session selected — actions apply to the <b>global default</b>.</div>
+
+        <label>Rename (selected session)</label>
+        <div class="row">
+          <input id="renameInput" placeholder="new name" />
+          <button style="flex:0 0 auto" onclick="setName()">Rename</button>
+        </div>
 
         <label>Mode (selected session)</label>
         <div class="row">
@@ -203,7 +210,8 @@ function renderSessions() {
     const client = s.client_info ? (s.client_info.name || JSON.stringify(s.client_info)) : "unknown client";
     const pendingCount = pendingCountFor(s.session_id);
     div.innerHTML =
-      `<div class="id">${esc(s.session_id)}</div>
+      `<div class="name">${esc(s.name || s.session_id)}</div>
+       <div class="id">${esc(s.session_id)}</div>
        <div class="meta">
          <span class="pill ${s.mode}">${s.mode}</span>
          <span>${esc(client)}</span>
@@ -213,6 +221,11 @@ function renderSessions() {
     div.onclick = () => selectSession(s.session_id);
     box.appendChild(div);
   }
+}
+// Friendly label for a session id, falling back to the id when unknown.
+function labelFor(sid) {
+  const s = sessionMap.get(sid);
+  return s && s.name ? s.name : sid;
 }
 function pendingCountFor(sid) {
   let n = 0;
@@ -228,7 +241,7 @@ function selectSession(sid) {
 function updateSelInfo() {
   const el = document.getElementById("selInfo");
   el.innerHTML = selected
-    ? `Selected session: <b>${esc(selected)}</b>`
+    ? `Selected: <b>${esc(labelFor(selected))}</b> <span class="muted mono">${esc(selected)}</span>`
     : 'No session selected — actions apply to the <b>global default</b>.';
 }
 
@@ -248,7 +261,7 @@ function renderPending() {
     div.className = "pending";
     div.innerHTML =
       `<div class="head"><span class="tool">${esc(c.tool)}</span>
-         <span class="muted mono">${esc(c.session_id)}</span></div>
+         <span class="muted">${esc(labelFor(c.session_id))}</span></div>
        <div class="args">${esc(JSON.stringify(c.arguments, null, 2))}</div>
        <textarea id="resp-${c.call_id}" rows="2" placeholder="response text"></textarea>
        <div class="actions">
@@ -288,6 +301,14 @@ async function clearSessionTools() {
   if (!selected) { flash("select a session first"); return; }
   await api("DELETE", `/api/sessions/${encodeURIComponent(selected)}/tools`);
   flash("session reverted to default"); refreshSessions();
+}
+async function setName() {
+  if (!selected) { flash("select a session first"); return; }
+  const name = document.getElementById("renameInput").value.trim();
+  if (!name) { flash("enter a name"); return; }
+  await api("PUT", `/api/sessions/${encodeURIComponent(selected)}/name`, { name });
+  document.getElementById("renameInput").value = "";
+  flash("renamed → " + name); refreshSessions();
 }
 async function setMode(mode) {
   if (!selected) { flash("select a session first"); return; }
@@ -341,7 +362,7 @@ function logEvent(evt) {
   const div = document.createElement("div");
   div.className = "ev " + evt.type;
   const time = new Date((evt.timestamp || 0) * 1000).toLocaleTimeString();
-  const sid = evt.session_id ? ` <span class="sid">[${esc(evt.session_id.slice(0, 12))}…]</span>` : "";
+  const sid = evt.session_id ? ` <span class="sid">[${esc(labelFor(evt.session_id))}]</span>` : "";
   div.innerHTML = `<span class="t">${time}</span> <span class="ty">${evt.type}</span>${sid}
     <div class="data">${esc(JSON.stringify(evt.data))}</div>`;
   log.appendChild(div);

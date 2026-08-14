@@ -113,6 +113,7 @@ class ExplorerMCP:
             self.events.emit(
                 "session_created",
                 session_id=session_id,
+                name=state.name,
                 client_info=state.client_info,
                 mode=state.mode,
             )

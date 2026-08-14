@@ -49,8 +49,9 @@ bearer token guarding `/api/*`).
 
 Open `http://127.0.0.1:8000/live` for a dependency-free (vanilla HTML/CSS/JS)
 dashboard that uses the REST + SSE APIs: watch the live event stream, see
-connected sessions, edit the tool set (global or per-session), toggle a session's
-mode, set presets, and answer blocked tool calls inline.
+connected sessions (each gets a friendly auto-assigned `adjective-animal` name,
+which you can override), edit the tool set (global or per-session), toggle a
+session's mode, set presets, and answer blocked tool calls inline.
 
 The UI is **fully stream-driven — it does not poll**. It fetches state once on
 load, then updates reactively from the SSE stream: pending-call counts come
@@ -94,6 +95,7 @@ Presets always take precedence over blocking, in either mode.
 | `GET /api/healthz` | Liveness. |
 | `GET /api/sessions` | List active sessions. |
 | `GET /api/sessions/{sid}` | Session detail. |
+| `PUT /api/sessions/{sid}/name` | Rename a session (human-readable label). |
 | `PUT /api/tools` | Set the global default tool set. |
 | `PUT /api/sessions/{sid}/tools` | Set tools for one session (→ `list_changed`). |
 | `DELETE /api/sessions/{sid}/tools` | Revert a session to the default tool set. |

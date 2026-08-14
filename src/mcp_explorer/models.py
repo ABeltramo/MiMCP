@@ -67,6 +67,10 @@ class SetModeRequest(BaseModel):
     mode: Mode
 
 
+class SetNameRequest(BaseModel):
+    name: str
+
+
 # --- REST / SSE response shapes -----------------------------------------
 
 
@@ -80,6 +84,7 @@ class PendingCallView(BaseModel):
 
 class SessionView(BaseModel):
     session_id: str
+    name: str = ""
     client_info: dict[str, Any] | None = None
     mode: Mode
     tool_count: int
