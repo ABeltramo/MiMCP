@@ -46,6 +46,26 @@ async def test_set_default_tools_and_list_sessions(client):
 
 
 @pytest.mark.asyncio
+async def test_get_and_set_instructions(client):
+    async with client:
+        # Defaults to the configured value.
+        r = await client.get("/api/instructions")
+        assert r.status_code == 200
+        assert r.json() == {
+            "instructions": "A controllable MCP server driven at runtime via REST."
+        }
+
+        r = await client.put(
+            "/api/instructions", json={"instructions": "Prefer the search tool."}
+        )
+        assert r.status_code == 200
+        assert r.json() == {"instructions": "Prefer the search tool."}
+
+        r = await client.get("/api/instructions")
+        assert r.json() == {"instructions": "Prefer the search tool."}
+
+
+@pytest.mark.asyncio
 async def test_unknown_session_404(client):
     async with client:
         r = await client.get("/api/sessions/nope")

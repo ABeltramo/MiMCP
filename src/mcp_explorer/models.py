@@ -71,6 +71,12 @@ class SetNameRequest(BaseModel):
     name: str
 
 
+class SetInstructionsRequest(BaseModel):
+    """Server-level MCP `instructions` applied to future initialize handshakes."""
+
+    instructions: str
+
+
 # --- REST / SSE response shapes -----------------------------------------
 
 

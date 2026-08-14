@@ -17,6 +17,7 @@ from .models import (
     PresetResponse,
     RespondPayload,
     SessionView,
+    SetInstructionsRequest,
     SetModeRequest,
     SetNameRequest,
     SetToolsRequest,
@@ -89,6 +90,20 @@ def create_api_router(
     async def list_pending(session_id: str) -> list[PendingCallView]:
         state = _session_or_404(session_id)
         return [c.view() for c in state.pending.values()]
+
+    # --- instructions ----------------------------------------------------
+
+    @router.get("/instructions", dependencies=guard)
+    async def get_instructions() -> dict[str, str]:
+        return {"instructions": mcp.instructions}
+
+    @router.put("/instructions", dependencies=guard)
+    async def set_instructions(body: SetInstructionsRequest) -> dict[str, str]:
+        # Applies to future initialize handshakes only; MCP has no
+        # "instructions changed" notification, so already-connected clients keep
+        # the value they received at their own initialize.
+        mcp.set_instructions(body.instructions)
+        return {"instructions": mcp.instructions}
 
     # --- tools -----------------------------------------------------------
 

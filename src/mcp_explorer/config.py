@@ -28,6 +28,11 @@ class Settings:
     # Optional bearer token guarding the /api/* control plane. Empty = no auth.
     api_token: str = ""
 
+    # Top-level MCP `instructions` returned in the initialize handshake. These
+    # bias client tool routing, so they're a control knob; the REST plane can
+    # override this at runtime (see api.py PUT /api/instructions).
+    instructions: str = "A controllable MCP server driven at runtime via REST."
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -38,4 +43,5 @@ class Settings:
             ),
             default_mode=os.getenv("MCP_EXPLORER_MODE", cls.default_mode),
             api_token=os.getenv("MCP_EXPLORER_API_TOKEN", cls.api_token),
+            instructions=os.getenv("MCP_EXPLORER_INSTRUCTIONS", cls.instructions),
         )

@@ -92,6 +92,23 @@ async def test_dynamic_tools_and_list_changed(base_url):
 
 
 @pytest.mark.asyncio
+async def test_instructions_applied_to_new_initialize(base_url):
+    async with httpx.AsyncClient(base_url=base_url) as rest:
+        r = await rest.put(
+            "/api/instructions",
+            json={"instructions": "Use `lookup` before answering."},
+        )
+        assert r.status_code == 200
+
+        # A client connecting AFTER the PUT sees the new instructions in its
+        # initialize result.
+        async with streamable_http_client(f"{base_url}/mcp") as (read, write):
+            async with ClientSession(read, write) as session:
+                result = await session.initialize()
+                assert result.instructions == "Use `lookup` before answering."
+
+
+@pytest.mark.asyncio
 async def test_live_interception(base_url):
     async with httpx.AsyncClient(base_url=base_url) as rest:
         await rest.put(

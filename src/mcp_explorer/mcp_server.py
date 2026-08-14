@@ -91,7 +91,7 @@ class ExplorerMCP:
         self.server: Server[None] = Server(
             "mcp-explorer",
             version="0.1.0",
-            instructions="A controllable MCP server driven at runtime via REST.",
+            instructions=settings.instructions,
             on_list_tools=self._on_list_tools,
             on_call_tool=self._on_call_tool,
         )
@@ -224,6 +224,26 @@ class ExplorerMCP:
         )
 
     # --- control-plane helpers -------------------------------------------
+
+    @property
+    def instructions(self) -> str:
+        """The current top-level MCP `instructions` string.
+
+        Read straight off the SDK `Server`, which is the single source of truth
+        the initialize handshake consults.
+        """
+        return self.server.instructions or ""
+
+    def set_instructions(self, instructions: str) -> None:
+        """Set the `instructions` returned by future initialize handshakes.
+
+        The SDK rebuilds initialization options per connection from
+        `server.instructions`, so mutating it here means every NEW client
+        initialize picks up the change. Note: MCP has no "instructions changed"
+        notification — already-connected clients read instructions only once, at
+        initialize, and will not see the update. That's expected.
+        """
+        self.server.instructions = instructions
 
     async def notify_tools_changed(self, state: SessionState) -> bool:
         """Push tools/list_changed to a session's client, if connected."""
