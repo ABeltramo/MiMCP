@@ -21,6 +21,16 @@ async def test_healthz(client):
 
 
 @pytest.mark.asyncio
+async def test_live_dashboard_served(client):
+    async with client:
+        r = await client.get("/live")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/html")
+        assert "mcp-explorer" in r.text
+        assert "/api/events" in r.text  # the SSE wiring is present
+
+
+@pytest.mark.asyncio
 async def test_set_default_tools_and_list_sessions(client):
     async with client:
         r = await client.put(

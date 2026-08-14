@@ -21,6 +21,7 @@ from .config import Settings
 from .events import EventBus
 from .mcp_server import ExplorerMCP
 from .registry import SessionRegistry
+from .web import create_web_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -45,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.mcp = mcp
 
     app.include_router(create_api_router(registry, events, mcp, settings))
+    app.include_router(create_web_router())
 
     # Mount the MCP Streamable HTTP endpoint. The session manager is a plain
     # ASGI callable that ignores sub-path routing, so a POST to /mcp lands here.

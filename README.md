@@ -43,6 +43,16 @@ bearer token guarding `/api/*`).
 
 - MCP endpoint: `http://127.0.0.1:8000/mcp`
 - REST + SSE: `http://127.0.0.1:8000/api/...` (OpenAPI docs at `/docs`)
+- Web dashboard: `http://127.0.0.1:8000/live`
+
+## Web dashboard
+
+Open `http://127.0.0.1:8000/live` for a dependency-free (vanilla HTML/CSS/JS)
+dashboard that uses the REST + SSE APIs: watch the live event stream, see
+connected sessions, edit the tool set (global or per-session), toggle a session's
+mode, set presets, and answer blocked tool calls inline. Because browsers can't
+attach headers to an `EventSource`, the live stream assumes `MCP_EXPLORER_API_TOKEN`
+is unset (the default).
 
 ## Quick start
 

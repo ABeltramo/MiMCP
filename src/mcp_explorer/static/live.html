@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mcp-explorer · live</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --border: #2a2f3a;
+    --fg: #e6e9ef; --muted: #8b93a7; --accent: #5b9dff; --ok: #3fb950;
+    --warn: #d29922; --err: #f85149; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  #status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--ok); } .dot.off { background: var(--err); }
+  main { display: grid; grid-template-columns: 380px 1fr; gap: 12px; padding: 12px; align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+    margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .panel .body { padding: 12px; }
+  .col { min-width: 0; }
+  button {
+    background: var(--panel2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #04122e; font-weight: 600; }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  textarea, input, select {
+    width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 8px; font-family: var(--mono); font-size: 12.5px;
+  }
+  textarea { resize: vertical; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row > * { flex: 1; }
+  .muted { color: var(--muted); }
+  .mono { font-family: var(--mono); }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 20px; border: 1px solid var(--border); color: var(--muted); }
+  .pill.manual { color: var(--warn); border-color: var(--warn); }
+  .pill.auto { color: var(--ok); border-color: var(--ok); }
+
+  .session { padding: 9px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .session:last-child { border-bottom: none; }
+  .session:hover { background: var(--panel2); }
+  .session.sel { background: var(--panel2); box-shadow: inset 3px 0 0 var(--accent); }
+  .session .id { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  .session .meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; display: flex; gap: 10px; flex-wrap: wrap; }
+
+  .pending { border: 1px solid var(--warn); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #1c1a12; }
+  .pending .head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .pending .tool { font-weight: 600; }
+  .pending .args { font-family: var(--mono); font-size: 12px; color: var(--muted);
+    white-space: pre-wrap; word-break: break-word; margin: 6px 0; max-height: 120px; overflow: auto; }
+  .pending .actions { display: flex; gap: 8px; margin-top: 6px; }
+  .pending .actions button { flex: 0 0 auto; }
+
+  #log { height: 60vh; overflow: auto; padding: 8px 12px; font-family: var(--mono); font-size: 12px; }
+  .ev { padding: 4px 0; border-bottom: 1px dashed #232833; }
+  .ev .t { color: var(--muted); }
+  .ev .ty { font-weight: 600; }
+  .ev.tool_call_awaiting_response .ty { color: var(--warn); }
+  .ev.tool_call_completed .ty { color: var(--ok); }
+  .ev.tool_call_timeout .ty { color: var(--err); }
+  .ev.session_created .ty, .ev.session_closed .ty { color: var(--accent); }
+  .ev .sid { color: var(--muted); }
+  .ev .data { color: #b9c2d6; white-space: pre-wrap; word-break: break-word; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+  #selInfo { font-size: 12.5px; }
+  #selInfo b { font-family: var(--mono); }
+</style>
+</head>
+<body>
+<header>
+  <h1>mcp-explorer <span class="muted">· live</span></h1>
+  <div class="spacer"></div>
+  <div id="status"><span class="dot" id="dot"></span><span id="statusText">connecting…</span></div>
+</header>
+
+<main>
+  <div class="col">
+    <div class="panel">
+      <h2>Sessions</h2>
+      <div id="sessions"><div class="body muted">no sessions yet — connect an MCP client to /mcp</div></div>
+    </div>
+
+    <div class="panel">
+      <h2>Controls</h2>
+      <div class="body">
+        <div id="selInfo" class="muted">No session selected — actions apply to the <b>global default</b>.</div>
+
+        <label>Mode (selected session)</label>
+        <div class="row">
+          <button onclick="setMode('manual')">manual</button>
+          <button onclick="setMode('auto')">auto</button>
+        </div>
+
+        <label>Tools (JSON array of ToolDef)</label>
+        <textarea id="toolsJson" rows="8">[
+  {
+    "name": "echo",
+    "description": "Echoes the input.",
+    "input_schema": { "type": "object", "properties": { "text": { "type": "string" } } }
+  }
+]</textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" onclick="setTools('global')">Set global</button>
+          <button onclick="setTools('session')">Set for session</button>
+          <button class="danger" onclick="clearSessionTools()">Clear session</button>
+        </div>
+
+        <label>Preset response (selected session + tool)</label>
+        <div class="row">
+          <input id="presetTool" placeholder="tool name" />
+          <input id="presetDelay" placeholder="delay_s" value="0" />
+        </div>
+        <textarea id="presetText" rows="2" placeholder="response text">preset response</textarea>
+        <div class="row" style="margin-top:8px">
+          <label style="flex:0 0 auto; margin:6px 0 0"><input type="checkbox" id="presetErr" style="width:auto" /> is_error</label>
+          <button onclick="setPreset()">Set preset</button>
+          <button class="danger" onclick="deletePreset()">Delete preset</button>
+        </div>
+        <div class="hint">Presets return immediately; without one, manual-mode calls wait for a live reply below.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel">
+      <h2>Pending calls</h2>
+      <div class="body" id="pending"><div class="muted">no calls awaiting a response</div></div>
+    </div>
+
+    <div class="panel">
+      <h2>Event stream</h2>
+      <div id="log"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+const EVENT_TYPES = [
+  "session_created", "session_closed", "tools_updated",
+  "tool_call_started", "tool_call_awaiting_response",
+  "tool_call_completed", "tool_call_timeout",
+];
+
+let selected = null;            // selected session_id or null (=> global)
+const pending = new Map();      // call_id -> {call_id, session_id, tool, arguments}
+
+// --- REST helper ---------------------------------------------------------
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!r.ok) { flash(`${method} ${path} → ${r.status}: ${text}`); throw new Error(text); }
+  return data;
+}
+function flash(msg) {
+  const el = document.getElementById("statusText");
+  const prev = el.textContent; el.textContent = msg;
+  setTimeout(() => { el.textContent = prev; }, 2500);
+}
+
+// --- sessions ------------------------------------------------------------
+async function refreshSessions() {
+  let list; try { list = await api("GET", "/api/sessions"); } catch { return; }
+  const box = document.getElementById("sessions");
+  if (!list.length) { box.innerHTML = '<div class="body muted">no sessions yet — connect an MCP client to /mcp</div>'; return; }
+  box.innerHTML = "";
+  for (const s of list) {
+    const div = document.createElement("div");
+    div.className = "session" + (s.session_id === selected ? " sel" : "");
+    const client = s.client_info ? (s.client_info.name || JSON.stringify(s.client_info)) : "unknown client";
+    div.innerHTML =
+      `<div class="id">${esc(s.session_id)}</div>
+       <div class="meta">
+         <span class="pill ${s.mode}">${s.mode}</span>
+         <span>${esc(client)}</span>
+         <span>${s.tool_count} tools${s.has_custom_tools ? "" : " (default)"}</span>
+         <span>${s.pending_count} pending</span>
+       </div>`;
+    div.onclick = () => selectSession(s.session_id);
+    box.appendChild(div);
+  }
+}
+function selectSession(sid) {
+  selected = (selected === sid) ? null : sid;
+  updateSelInfo();
+  refreshSessions();
+  if (selected) seedPending(selected);
+}
+function updateSelInfo() {
+  const el = document.getElementById("selInfo");
+  el.innerHTML = selected
+    ? `Selected session: <b>${esc(selected)}</b>`
+    : 'No session selected — actions apply to the <b>global default</b>.';
+}
+
+// --- pending calls -------------------------------------------------------
+async function seedPending(sid) {
+  let list; try { list = await api("GET", `/api/sessions/${encodeURIComponent(sid)}/pending`); } catch { return; }
+  for (const c of list) pending.set(c.call_id, c);
+  renderPending();
+}
+function renderPending() {
+  const box = document.getElementById("pending");
+  if (!pending.size) { box.innerHTML = '<div class="muted">no calls awaiting a response</div>'; return; }
+  box.innerHTML = "";
+  for (const c of pending.values()) {
+    const div = document.createElement("div");
+    div.className = "pending";
+    div.innerHTML =
+      `<div class="head"><span class="tool">${esc(c.tool)}</span>
+         <span class="muted mono">${esc(c.session_id)}</span></div>
+       <div class="args">${esc(JSON.stringify(c.arguments, null, 2))}</div>
+       <textarea id="resp-${c.call_id}" rows="2" placeholder="response text"></textarea>
+       <div class="actions">
+         <button class="primary" onclick="respond('${c.call_id}', false)">Respond</button>
+         <button class="danger" onclick="respond('${c.call_id}', true)">Respond as error</button>
+       </div>`;
+    box.appendChild(div);
+  }
+}
+async function respond(callId, isError) {
+  const ta = document.getElementById(`resp-${callId}`);
+  const text = ta ? ta.value : "";
+  try {
+    await api("POST", `/api/calls/${encodeURIComponent(callId)}/respond`, { text, is_error: isError });
+    pending.delete(callId); renderPending();
+  } catch {}
+}
+
+// --- controls ------------------------------------------------------------
+function parseTools() {
+  const raw = document.getElementById("toolsJson").value;
+  const tools = JSON.parse(raw);
+  if (!Array.isArray(tools)) throw new Error("tools must be a JSON array");
+  return tools;
+}
+async function setTools(scope) {
+  let tools; try { tools = parseTools(); } catch (e) { flash("invalid tools JSON: " + e.message); return; }
+  if (scope === "global") { await api("PUT", "/api/tools", { tools }); flash("global tools set"); }
+  else {
+    if (!selected) { flash("select a session first"); return; }
+    await api("PUT", `/api/sessions/${encodeURIComponent(selected)}/tools`, { tools });
+    flash("session tools set");
+  }
+  refreshSessions();
+}
+async function clearSessionTools() {
+  if (!selected) { flash("select a session first"); return; }
+  await api("DELETE", `/api/sessions/${encodeURIComponent(selected)}/tools`);
+  flash("session reverted to default"); refreshSessions();
+}
+async function setMode(mode) {
+  if (!selected) { flash("select a session first"); return; }
+  await api("PUT", `/api/sessions/${encodeURIComponent(selected)}/mode`, { mode });
+  flash("mode → " + mode); refreshSessions();
+}
+async function setPreset() {
+  if (!selected) { flash("select a session first"); return; }
+  const tool = document.getElementById("presetTool").value.trim();
+  if (!tool) { flash("enter a tool name"); return; }
+  const body = {
+    text: document.getElementById("presetText").value,
+    is_error: document.getElementById("presetErr").checked,
+    delay_s: parseFloat(document.getElementById("presetDelay").value) || 0,
+  };
+  await api("PUT", `/api/sessions/${encodeURIComponent(selected)}/tools/${encodeURIComponent(tool)}/preset`, body);
+  flash(`preset set for ${tool}`); refreshSessions();
+}
+async function deletePreset() {
+  if (!selected) { flash("select a session first"); return; }
+  const tool = document.getElementById("presetTool").value.trim();
+  if (!tool) { flash("enter a tool name"); return; }
+  await api("DELETE", `/api/sessions/${encodeURIComponent(selected)}/tools/${encodeURIComponent(tool)}/preset`);
+  flash(`preset deleted for ${tool}`); refreshSessions();
+}
+
+// --- event stream --------------------------------------------------------
+function onEvent(evt) {
+  logEvent(evt);
+  switch (evt.type) {
+    case "tool_call_awaiting_response":
+      pending.set(evt.data.call_id, {
+        call_id: evt.data.call_id, session_id: evt.session_id,
+        tool: evt.data.tool, arguments: evt.data.arguments || {},
+      });
+      renderPending();
+      break;
+    case "tool_call_completed":
+    case "tool_call_timeout":
+      if (evt.data.call_id) { pending.delete(evt.data.call_id); renderPending(); }
+      refreshSessions();
+      break;
+    case "session_created":
+    case "session_closed":
+    case "tools_updated":
+      refreshSessions();
+      break;
+  }
+}
+function logEvent(evt) {
+  const log = document.getElementById("log");
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const div = document.createElement("div");
+  div.className = "ev " + evt.type;
+  const time = new Date((evt.timestamp || 0) * 1000).toLocaleTimeString();
+  const sid = evt.session_id ? ` <span class="sid">[${esc(evt.session_id.slice(0, 12))}…]</span>` : "";
+  div.innerHTML = `<span class="t">${time}</span> <span class="ty">${evt.type}</span>${sid}
+    <div class="data">${esc(JSON.stringify(evt.data))}</div>`;
+  log.appendChild(div);
+  while (log.childElementCount > 500) log.removeChild(log.firstChild);
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+function connect() {
+  const es = new EventSource("/api/events");
+  const dot = document.getElementById("dot"), txt = document.getElementById("statusText");
+  es.onopen = () => { dot.className = "dot on"; txt.textContent = "connected"; };
+  es.onerror = () => { dot.className = "dot off"; txt.textContent = "reconnecting…"; };
+  for (const t of EVENT_TYPES) {
+    es.addEventListener(t, (e) => { try { onEvent(JSON.parse(e.data)); } catch {} });
+  }
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// --- init ----------------------------------------------------------------
+updateSelInfo();
+refreshSessions().then(() => api("GET", "/api/sessions").then(list => {
+  for (const s of list) seedPending(s.session_id);
+}).catch(() => {}));
+connect();
+setInterval(refreshSessions, 5000);  // safety net if an event is missed
+</script>
+</body>
+</html>
