@@ -70,6 +70,7 @@ def create_api_router(
     async def set_mode(session_id: str, body: SetModeRequest) -> dict[str, str]:
         state = _session_or_404(session_id)
         state.mode = body.mode
+        events.emit("session_updated", session_id=session_id, change="mode", mode=state.mode)
         return {"session_id": session_id, "mode": state.mode}
 
     @router.get(
@@ -129,6 +130,7 @@ def create_api_router(
         state = _session_or_404(session_id)
         async with registry.lock:
             state.presets[name] = body
+        events.emit("session_updated", session_id=session_id, change="preset_set", tool=name)
         return {"session_id": session_id, "tool": name}
 
     @router.delete("/sessions/{session_id}/tools/{name}/preset", dependencies=guard)
@@ -136,6 +138,7 @@ def create_api_router(
         state = _session_or_404(session_id)
         async with registry.lock:
             state.presets.pop(name, None)
+        events.emit("session_updated", session_id=session_id, change="preset_deleted", tool=name)
         return {"session_id": session_id, "tool": name}
 
     # --- live responses --------------------------------------------------

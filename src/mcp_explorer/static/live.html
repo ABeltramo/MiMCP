@@ -153,13 +153,19 @@
 "use strict";
 
 const EVENT_TYPES = [
-  "session_created", "session_closed", "tools_updated",
+  "session_created", "session_closed", "session_updated", "tools_updated",
   "tool_call_started", "tool_call_awaiting_response",
   "tool_call_completed", "tool_call_timeout",
 ];
+// Events that change session identity/config — trigger one authoritative
+// GET /api/sessions to resync. Everything else is handled from the stream alone.
+const STRUCTURAL = new Set([
+  "session_created", "session_closed", "session_updated", "tools_updated",
+]);
 
 let selected = null;            // selected session_id or null (=> global)
 const pending = new Map();      // call_id -> {call_id, session_id, tool, arguments}
+const sessionMap = new Map();   // session_id -> SessionView (last authoritative snapshot)
 
 // --- REST helper ---------------------------------------------------------
 async function api(method, path, body) {
@@ -178,31 +184,45 @@ function flash(msg) {
 }
 
 // --- sessions ------------------------------------------------------------
+// Authoritative resync: only called on load and on structural stream events.
 async function refreshSessions() {
   let list; try { list = await api("GET", "/api/sessions"); } catch { return; }
+  sessionMap.clear();
+  for (const s of list) sessionMap.set(s.session_id, s);
+  renderSessions();
+}
+// Pure render from the last snapshot; the pending count is derived live from
+// the SSE-fed `pending` map so tool-call events never need a GET.
+function renderSessions() {
   const box = document.getElementById("sessions");
-  if (!list.length) { box.innerHTML = '<div class="body muted">no sessions yet — connect an MCP client to /mcp</div>'; return; }
+  if (!sessionMap.size) { box.innerHTML = '<div class="body muted">no sessions yet — connect an MCP client to /mcp</div>'; return; }
   box.innerHTML = "";
-  for (const s of list) {
+  for (const s of sessionMap.values()) {
     const div = document.createElement("div");
     div.className = "session" + (s.session_id === selected ? " sel" : "");
     const client = s.client_info ? (s.client_info.name || JSON.stringify(s.client_info)) : "unknown client";
+    const pendingCount = pendingCountFor(s.session_id);
     div.innerHTML =
       `<div class="id">${esc(s.session_id)}</div>
        <div class="meta">
          <span class="pill ${s.mode}">${s.mode}</span>
          <span>${esc(client)}</span>
          <span>${s.tool_count} tools${s.has_custom_tools ? "" : " (default)"}</span>
-         <span>${s.pending_count} pending</span>
+         <span>${pendingCount} pending</span>
        </div>`;
     div.onclick = () => selectSession(s.session_id);
     box.appendChild(div);
   }
 }
+function pendingCountFor(sid) {
+  let n = 0;
+  for (const c of pending.values()) if (c.session_id === sid) n++;
+  return n;
+}
 function selectSession(sid) {
   selected = (selected === sid) ? null : sid;
   updateSelInfo();
-  refreshSessions();
+  renderSessions();
   if (selected) seedPending(selected);
 }
 function updateSelInfo() {
@@ -217,6 +237,7 @@ async function seedPending(sid) {
   let list; try { list = await api("GET", `/api/sessions/${encodeURIComponent(sid)}/pending`); } catch { return; }
   for (const c of list) pending.set(c.call_id, c);
   renderPending();
+  renderSessions();
 }
 function renderPending() {
   const box = document.getElementById("pending");
@@ -303,18 +324,16 @@ function onEvent(evt) {
         tool: evt.data.tool, arguments: evt.data.arguments || {},
       });
       renderPending();
+      renderSessions();   // pending count is derived from `pending` — no GET
       break;
     case "tool_call_completed":
     case "tool_call_timeout":
       if (evt.data.call_id) { pending.delete(evt.data.call_id); renderPending(); }
-      refreshSessions();
-      break;
-    case "session_created":
-    case "session_closed":
-    case "tools_updated":
-      refreshSessions();
+      renderSessions();   // no GET on the hot path
       break;
   }
+  // Structural changes (session lifecycle / tools / mode / preset) resync once.
+  if (STRUCTURAL.has(evt.type)) refreshSessions();
 }
 function logEvent(evt) {
   const log = document.getElementById("log");
@@ -332,7 +351,13 @@ function logEvent(evt) {
 function connect() {
   const es = new EventSource("/api/events");
   const dot = document.getElementById("dot"), txt = document.getElementById("statusText");
-  es.onopen = () => { dot.className = "dot on"; txt.textContent = "connected"; };
+  let opened = false;
+  es.onopen = () => {
+    dot.className = "dot on"; txt.textContent = "connected";
+    // Resync after a (re)connect so events missed during a gap aren't lost.
+    if (opened) { pending.clear(); seedAll(); }
+    opened = true;
+  };
   es.onerror = () => { dot.className = "dot off"; txt.textContent = "reconnecting…"; };
   for (const t of EVENT_TYPES) {
     es.addEventListener(t, (e) => { try { onEvent(JSON.parse(e.data)); } catch {} });
@@ -345,12 +370,15 @@ function esc(s) {
 }
 
 // --- init ----------------------------------------------------------------
+// One authoritative fetch to seed state; everything after is driven by the SSE
+// stream (no polling). EventSource auto-reconnects and, on reconnect, we resync.
 updateSelInfo();
-refreshSessions().then(() => api("GET", "/api/sessions").then(list => {
-  for (const s of list) seedPending(s.session_id);
-}).catch(() => {}));
+async function seedAll() {
+  await refreshSessions();
+  for (const sid of sessionMap.keys()) await seedPending(sid);
+}
+seedAll();
 connect();
-setInterval(refreshSessions, 5000);  // safety net if an event is missed
 </script>
 </body>
 </html>

@@ -95,6 +95,7 @@ class Event(BaseModel):
     type: Literal[
         "session_created",
         "session_closed",
+        "session_updated",
         "tools_updated",
         "tool_call_started",
         "tool_call_awaiting_response",

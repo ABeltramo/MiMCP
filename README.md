@@ -50,9 +50,15 @@ bearer token guarding `/api/*`).
 Open `http://127.0.0.1:8000/live` for a dependency-free (vanilla HTML/CSS/JS)
 dashboard that uses the REST + SSE APIs: watch the live event stream, see
 connected sessions, edit the tool set (global or per-session), toggle a session's
-mode, set presets, and answer blocked tool calls inline. Because browsers can't
-attach headers to an `EventSource`, the live stream assumes `MCP_EXPLORER_API_TOKEN`
-is unset (the default).
+mode, set presets, and answer blocked tool calls inline.
+
+The UI is **fully stream-driven — it does not poll**. It fetches state once on
+load, then updates reactively from the SSE stream: pending-call counts come
+straight from tool-call events, and structural changes (a session connecting, or
+tools/mode/preset changes — the latter emit a `session_updated` event) trigger a
+single authoritative resync. It also resyncs whenever the `EventSource`
+reconnects. Because browsers can't attach headers to an `EventSource`, the live
+stream assumes `MCP_EXPLORER_API_TOKEN` is unset (the default).
 
 ## Quick start
 
