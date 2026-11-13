@@ -23,14 +23,27 @@ responses, and inspect exactly what the agent sent.
 
 ## Architecture
 
-```
-              ┌───────────────────────── FastAPI app ─────────────────────────┐
- agent ───────┤  /mcp     Streamable HTTP, gated on a session token             │
- (MCP client) │            → low-level Server → UpstreamManager → upstream     │
-              │  /api/*   REST control plane (create sessions, overlays,       │
-              │            read recorded calls)                                │
-              └────────────────────────────────────────────────────────────────┘
- controller ──(REST: create session, set overlay, read calls)
+```mermaid
+flowchart TD
+    controller["Controller<br/>(REST, before the agent connects)"]
+    subgraph mimcp["MiMCP"]
+        gate["Token gate /mcp"]
+        overlay["Tool overlay<br/>relay / override / inject"]
+        recording[("Call recording")]
+        upstream["Upstream connection"]
+    end
+    agent["Agent<br/>(MCP client)"]
+    upstreamsrv["Upstream MCP server"]
+
+    controller -- "1. POST /api/sessions<br/>upstream + tool overlay<br/>→ session token" --> mimcp
+    controller -- "2. Responses API call<br/>tools: mcp → MiMCP /mcp<br/>with the session token" --> agent
+    agent -- "3. tools/list, tool calls<br/>(Bearer session token)" --> gate
+    gate --> overlay
+    overlay -- "relay / inject: forward" --> upstream
+    upstream --> upstreamsrv
+    overlay -- "recorded (tool, arguments, behavior)" --> recording
+    overlay -- "4. result, possibly tampered" --> agent
+    controller -. "5. GET /api/sessions/{token}/calls" .-> recording
 ```
 
 - Sessions are created via `POST /api/sessions` **before** the agent connects.
