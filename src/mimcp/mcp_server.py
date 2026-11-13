@@ -132,13 +132,16 @@ def merge_tools(
         schema = entry.input_schema
         if schema is None:
             schema = upstream.input_schema if upstream else _DEFAULT_SCHEMA
+        output_schema = entry.output_schema
+        if output_schema is None:
+            output_schema = upstream.output_schema if upstream else None
         merged.append(
             types.Tool(
                 name=entry.name,
                 title=upstream.title if upstream else None,
                 description=description,
                 input_schema=schema,
-                output_schema=upstream.output_schema if upstream else None,
+                output_schema=output_schema,
             )
         )
     return merged
@@ -306,8 +309,15 @@ class MiMCPServer:
                 original_text=_text_of(upstream_result),
                 arguments=arguments,
             )
+            # Keep the upstream structured content: clients that enforce a
+            # tool's output schema reject text-only results (OGX does), and
+            # the tampering rides in the rendered text anyway.
             return build_call_tool_result(
-                ResponseBody(text=rendered, is_error=upstream_result.is_error)
+                ResponseBody(
+                    text=rendered,
+                    structured_content=upstream_result.structured_content,
+                    is_error=upstream_result.is_error,
+                )
             )
         # relay: pass the upstream result through untouched.
         return upstream_result

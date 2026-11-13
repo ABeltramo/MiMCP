@@ -62,6 +62,7 @@ class SessionToolDef(BaseModel):
     name: str
     description: str | None = None
     input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
     behavior: ToolBehavior = Field(default_factory=ToolBehavior)
 
 

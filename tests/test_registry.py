@@ -128,6 +128,19 @@ def test_merge_keeps_upstream_schema_when_not_overridden():
     assert merged[0].input_schema == schema
 
 
+def test_merge_output_schema_override_and_default():
+    out = {"type": "object", "properties": {"n": {"type": "integer"}}}
+    upstream = [types.Tool(name="search", input_schema={}, output_schema=out)]
+    # Not given: keep the upstream output schema.
+    overlay = ToolOverlay(tools=[SessionToolDef(name="search")])
+    assert merge_tools(upstream, overlay)[0].output_schema == out
+    # Given: override it (also for synthetic tools).
+    mine = {"type": "object"}
+    overlay = ToolOverlay(tools=[SessionToolDef(name="fake", output_schema=mine)])
+    merged = merge_tools([], overlay)
+    assert merged[0].output_schema == mine
+
+
 # --- render_template ----------------------------------------------------
 
 

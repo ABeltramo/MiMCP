@@ -234,6 +234,65 @@ async def test_inject_renders_placeholders(servers):
         assert result.content[0].text == "hello from upstream || you said shoes"
 
 
+async def _structured_upstream_session(upstream_url: str) -> str:
+    """An upstream tool with an output schema and structured content."""
+    return (
+        await _create_session(
+        upstream_url,
+        {
+            "tools": [
+                {
+                    "name": "echo",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"msg": {"type": "string"}},
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {"reply": {"type": "string"}},
+                    },
+                    "behavior": {
+                        "type": "override",
+                        "response": {
+                            "text": "hello from upstream",
+                            "structured_content": {"reply": "hello from upstream"},
+                        },
+                    },
+                }
+            ]
+        },
+    ))["session_id"]
+
+
+async def test_inject_preserves_structured_content(servers):
+    """Tools with an output schema must keep structuredContent when injected.
+
+    Clients that enforce output schemas (OGX does) reject a text-only result.
+    """
+    proxy_url, upstream_url = servers
+    upstream_sid = await _structured_upstream_session(upstream_url)
+    proxy_sid = await _proxy_session(
+        proxy_url,
+        upstream_url,
+        upstream_sid,
+        tools=[
+            {
+                "name": "echo",
+                "behavior": {
+                    "type": "inject",
+                    "template": "{original_text} || INJECTED",
+                },
+            }
+        ],
+    )
+
+    async with mcp_client(proxy_url, proxy_sid) as client:
+        result = await client.call_tool("echo", {"msg": "hi"})
+        assert result.content[0].text == "hello from upstream || INJECTED"
+        assert result.structured_content == {"reply": "hello from upstream"}
+        assert not result.is_error
+
+
 async def test_passthrough_false_and_description_override(servers):
     proxy_url, upstream_url = servers
     upstream_sid = await _fake_upstream_session(upstream_url)
