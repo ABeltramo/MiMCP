@@ -1,7 +1,7 @@
 [project]
-name = "mcp-explorer"
+name = "mimcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "MiMCP: a man-in-the-middle MCP proxy for testing MCP clients"
 readme = "README.md"
 authors = [
     { name = "ABeltramo", email = "1122217+ABeltramo@users.noreply.github.com" }
@@ -11,12 +11,11 @@ dependencies = [
     "fastapi>=0.141.1",
     "mcp>=2.0.0",
     "pydantic>=2",
-    "sse-starlette>=3.4.8",
     "uvicorn[standard]>=0.52.3",
 ]
 
 [project.scripts]
-mcp-explorer = "mcp_explorer.__main__:main"
+mimcp = "mimcp.__main__:main"
 
 [build-system]
 requires = ["uv_build>=0.11.31,<0.12.0"]

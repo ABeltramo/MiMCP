@@ -1,75 +1,178 @@
-import asyncio
+"""Unit tests: registry, overlay merge, template rendering, recording."""
 
-import pytest
+from __future__ import annotations
 
-from mcp_explorer.models import PresetResponse, ResponseBody, ToolDef
-from mcp_explorer.registry import PendingCall, SessionRegistry
+import mcp.types as types
 
-
-def test_default_mode_and_creation():
-    reg = SessionRegistry(default_mode="auto")
-    state = reg.get_or_create("s1")
-    assert state.mode == "auto"
-    assert reg.get("s1") is state
-    # Idempotent
-    assert reg.get_or_create("s1") is state
-
-
-def test_sessions_get_unique_readable_names():
-    reg = SessionRegistry()
-    names = {reg.get_or_create(f"s{i}").name for i in range(50)}
-    assert len(names) == 50  # collision-free
-    assert all("-" in n for n in names)  # adjective-animal shape
-    # Names are stable across lookups.
-    assert reg.get_or_create("s0").name == reg.get("s0").name
+from mimcp.models import (
+    RecordedCall,
+    ResponseBody,
+    SessionConfig,
+    SessionToolDef,
+    ToolBehavior,
+    ToolOverlay,
+    render_template,
+)
+from mimcp.mcp_server import merge_tools
+from mimcp.registry import SessionRegistry
 
 
-def test_effective_tools_fallback_and_override():
-    reg = SessionRegistry()
-    reg.set_default_tools([ToolDef(name="echo")])
-    state = reg.get_or_create("s1")
-    assert [t.name for t in reg.effective_tools(state)] == ["echo"]
-
-    state.tools = [ToolDef(name="custom")]
-    assert [t.name for t in reg.effective_tools(state)] == ["custom"]
-
-
-def test_effective_preset_precedence():
-    reg = SessionRegistry()
-    reg.set_default_presets({"echo": PresetResponse(text="default")})
-    state = reg.get_or_create("s1")
-    assert reg.effective_preset(state, "echo").text == "default"
-    state.presets["echo"] = PresetResponse(text="session")
-    assert reg.effective_preset(state, "echo").text == "session"
-    assert reg.effective_preset(state, "missing") is None
-
-
-@pytest.mark.asyncio
-async def test_pending_lifecycle():
-    reg = SessionRegistry()
-    loop = asyncio.get_running_loop()
-    call = PendingCall(
-        call_id="c1",
-        session_id="s1",
-        tool="echo",
-        arguments={"a": 1},
-        future=loop.create_future(),
+def _tool(name: str, description: str = "") -> types.Tool:
+    return types.Tool(
+        name=name, description=description, input_schema={"type": "object"}
     )
-    reg.register_pending(call)
-    assert reg.find_pending("c1") is call
-    popped = reg.pop_pending("c1")
-    assert popped is call
-    assert reg.find_pending("c1") is None
-    assert reg.pop_pending("c1") is None
 
 
-@pytest.mark.asyncio
-async def test_remove_session_cleans_call_index():
-    reg = SessionRegistry()
-    fut = asyncio.get_running_loop().create_future()
-    reg.register_pending(
-        PendingCall(call_id="c1", session_id="s1", tool="t", arguments={}, future=fut)
+# --- registry -----------------------------------------------------------
+
+
+def test_create_session_from_config():
+    registry = SessionRegistry()
+    state = registry.create(
+        SessionConfig(
+            name="agent-under-test",
+            instructions="You are being tested.",
+            upstream={"url": "http://upstream.example/mcp"},
+            tools=[{"name": "search", "behavior": {"type": "override", "response": {"text": "no"}}}],
+        )
     )
-    reg.remove("s1")
-    assert reg.find_pending("c1") is None
-    fut.cancel()
+    assert state.status == "pending"
+    assert state.name == "agent-under-test"
+    assert state.instructions == "You are being tested."
+    assert state.upstream_url == "http://upstream.example/mcp"
+    assert state.overlay is not None
+    assert [t.name for t in state.overlay.tools] == ["search"]
+    assert state.behavior_for("search").type == "override"
+    # Unlisted tools default to relay.
+    assert state.behavior_for("other").type == "relay"
+
+
+def test_tokens_are_unique_and_readable():
+    registry = SessionRegistry()
+    tokens = {registry.create(SessionConfig()).session_id for _ in range(20)}
+    assert len(tokens) == 20
+    # adjective-animal-<hex>, e.g. swift-otter-1a2b
+    for token in tokens:
+        parts = token.rsplit("-", 1)
+        assert len(parts) == 2 and len(parts[1]) == 4
+        assert parts[0].count("-") == 1
+
+
+def test_recorded_calls_are_capped():
+    registry = SessionRegistry(max_recorded_calls=3)
+    state = registry.create(SessionConfig())
+    for i in range(5):
+        state.record_call(
+            RecordedCall(
+                call_id=str(i),
+                tool="t",
+                behavior="relay",
+                status="completed",
+                started_at=0.0,
+                duration_ms=1.0,
+            )
+        )
+    assert [c.call_id for c in state.recorded_calls] == ["2", "3", "4"]
+
+
+# --- merge_tools --------------------------------------------------------
+
+
+def test_merge_passthrough_keeps_unlisted_upstream_tools():
+    upstream = [_tool("search", "upstream search"), _tool("weather", "upstream weather")]
+    overlay = ToolOverlay(
+        tools=[SessionToolDef(name="search", description="SPAM search")]
+    )
+    merged = merge_tools(upstream, overlay)
+    assert [t.name for t in merged] == ["weather", "search"]
+    by_name = {t.name: t for t in merged}
+    assert by_name["search"].description == "SPAM search"
+    assert by_name["weather"].description == "upstream weather"
+
+
+def test_merge_passthrough_false_hides_unlisted_tools():
+    upstream = [_tool("search"), _tool("weather")]
+    overlay = ToolOverlay(
+        passthrough=False,
+        tools=[
+            SessionToolDef(
+                name="search",
+                description="kept, with the upstream schema",
+                input_schema={"type": "object", "properties": {"q": {"type": "string"}}},
+            )
+        ],
+    )
+    merged = merge_tools(upstream, overlay)
+    assert [t.name for t in merged] == ["search"]
+    assert merged[0].input_schema == {"type": "object", "properties": {"q": {"type": "string"}}}
+
+
+def test_merge_synthetic_tool_gets_default_schema():
+    overlay = ToolOverlay(tools=[SessionToolDef(name="fake", description="made up")])
+    merged = merge_tools([], overlay)
+    assert len(merged) == 1
+    assert merged[0].name == "fake"
+    assert merged[0].input_schema == {"type": "object", "properties": {}}
+
+
+def test_merge_none_overlay_is_pure_relay():
+    upstream = [_tool("search")]
+    assert merge_tools(upstream, None) == upstream
+
+
+def test_merge_keeps_upstream_schema_when_not_overridden():
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    upstream = [types.Tool(name="search", description="d", input_schema=schema)]
+    overlay = ToolOverlay(tools=[SessionToolDef(name="search")])
+    merged = merge_tools(upstream, overlay)
+    assert merged[0].input_schema == schema
+
+
+# --- render_template ----------------------------------------------------
+
+
+def _upstream_result() -> types.CallToolResult:
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text="hello world")],
+        structuredContent={"n": 1},
+    )
+
+
+def test_render_all_placeholders():
+    result = _upstream_result()
+    rendered = render_template(
+        "{original_text} | {args.q} | {original_payload}",
+        original_payload=result.model_dump_json(),
+        original_text="hello world",
+        arguments={"q": "shoes"},
+    )
+    assert rendered.startswith("hello world | shoes | ")
+    assert '"text":"hello world"' in rendered
+
+
+def test_render_json_encodes_non_string_args():
+    rendered = render_template(
+        "{args.n}", original_payload="", original_text="", arguments={"n": 42}
+    )
+    assert rendered == "42"
+
+
+def test_render_unknown_placeholders_stay_literal():
+    rendered = render_template(
+        "{unknown} {args.missing}", original_payload="p", original_text="t", arguments={}
+    )
+    assert rendered == "{unknown} {args.missing}"
+
+
+def test_render_leaves_other_braces_alone():
+    rendered = render_template('{"json": true}', original_payload="", original_text="", arguments={})
+    assert rendered == '{"json": true}'
+
+
+# --- behavior model -----------------------------------------------------
+
+
+def test_override_body_defaults():
+    behavior = ToolBehavior(type="override")
+    body = behavior.response or ResponseBody(text="fallback", is_error=True)
+    assert body.is_error is True

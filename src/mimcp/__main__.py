@@ -1,4 +1,4 @@
-"""Entry point: ``uv run mcp-explorer`` / ``python -m mcp_explorer``."""
+"""Entry point: ``uv run mimcp`` / ``python -m mimcp``."""
 
 from __future__ import annotations
 

@@ -1,25 +1,33 @@
-"""End-to-end: real HTTP server + real MCP client + REST control plane.
+"""End-to-end: real servers, real MCP client, real upstream.
 
-Runs uvicorn in a background thread so the MCP client talks to the server over
-a real socket, exercising the Streamable HTTP transport and session handling.
+Boots two MiMCP instances: one acts as the MITM proxy, the other (in
+no-upstream override mode) as the fake upstream MCP server. This gives the
+proxy a real streamable-HTTP upstream without any extra fixtures.
 """
 
 from __future__ import annotations
 
-import asyncio
 import socket
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 
 import httpx
 import pytest
 import uvicorn
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 
-from mcp_explorer.app import create_app
-from mcp_explorer.config import Settings
+from mimcp.app import create_app
+from mimcp.config import Settings
+
+TEST_SETTINGS = Settings(
+    upstream_timeout_s=10.0,
+    upstream_connect_timeout_s=5.0,
+    max_recorded_calls=100,
+)
 
 
 def _free_port() -> int:
@@ -30,11 +38,9 @@ def _free_port() -> int:
     return port
 
 
-@pytest.fixture
-def base_url() -> Iterator[str]:
+def _boot_server() -> str:
     port = _free_port()
-    settings = Settings(host="127.0.0.1", port=port, default_timeout_s=5.0)
-    app = create_app(settings)
+    app = create_app(TEST_SETTINGS)
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -45,160 +51,266 @@ def base_url() -> Iterator[str]:
     while time.time() < deadline:
         try:
             if httpx.get(f"{url}/api/healthz", timeout=0.5).status_code == 200:
-                break
+                return url
         except httpx.HTTPError:
             time.sleep(0.05)
-    else:  # pragma: no cover
-        raise RuntimeError("server did not start")
-
-    yield url
-
-    server.should_exit = True
-    thread.join(timeout=5)
+    raise RuntimeError("server did not start")  # pragma: no cover
 
 
-async def _first_session_id(rest: httpx.AsyncClient) -> str:
-    for _ in range(50):
-        sessions = (await rest.get("/api/sessions")).json()
-        if sessions:
-            return sessions[0]["session_id"]
-        await asyncio.sleep(0.05)
-    raise AssertionError("no session registered")
+@pytest.fixture(scope="module")
+def servers() -> Iterator[tuple[str, str]]:
+    """(proxy_url, upstream_url) for the two booted MiMCP instances."""
+    upstream_url = _boot_server()
+    proxy_url = _boot_server()
+    yield proxy_url, upstream_url
 
 
-@pytest.mark.asyncio
-async def test_dynamic_tools_and_list_changed(base_url):
-    async with httpx.AsyncClient(base_url=base_url) as rest:
-        await rest.put("/api/tools", json={"tools": [{"name": "echo"}]})
-
-        async with streamable_http_client(f"{base_url}/mcp") as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-
-                tools = await session.list_tools()
-                assert [t.name for t in tools.tools] == ["echo"]
-
-                sid = await _first_session_id(rest)
-
-                # Give this session a different tool set; expect list_changed.
-                r = await rest.put(
-                    f"/api/sessions/{sid}/tools",
-                    json={"tools": [{"name": "special", "description": "only for A"}]},
-                )
-                assert r.json()["notified"] is True
-
-                tools = await session.list_tools()
-                assert [t.name for t in tools.tools] == ["special"]
+async def _create_session(base_url: str, payload: dict) -> dict:
+    async with httpx.AsyncClient() as rest:
+        r = await rest.post(f"{base_url}/api/sessions", json=payload)
+        assert r.status_code == 201, r.text
+        return r.json()
 
 
-@pytest.mark.asyncio
-async def test_instructions_applied_to_new_initialize(base_url):
-    async with httpx.AsyncClient(base_url=base_url) as rest:
-        r = await rest.put(
-            "/api/instructions",
-            json={"instructions": "Use `lookup` before answering."},
-        )
+async def _get_calls(base_url: str, session_id: str) -> list[dict]:
+    async with httpx.AsyncClient() as rest:
+        r = await rest.get(f"{base_url}/api/sessions/{session_id}/calls")
         assert r.status_code == 200
-
-        # A client connecting AFTER the PUT sees the new instructions in its
-        # initialize result.
-        async with streamable_http_client(f"{base_url}/mcp") as (read, write):
-            async with ClientSession(read, write) as session:
-                result = await session.initialize()
-                assert result.instructions == "Use `lookup` before answering."
+        return r.json()
 
 
-@pytest.mark.asyncio
-async def test_live_interception(base_url):
-    async with httpx.AsyncClient(base_url=base_url) as rest:
-        await rest.put(
-            "/api/tools",
-            json={
-                "tools": [
-                    {
-                        "name": "lookup",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {"q": {"type": "string"}},
-                        },
-                    }
-                ]
-            },
-        )
-
-        async with streamable_http_client(f"{base_url}/mcp") as (read, write):
+@asynccontextmanager
+async def mcp_client(base_url: str, token: str) -> AsyncIterator[ClientSession]:
+    http = create_mcp_http_client(headers={"Authorization": f"Bearer {token}"})
+    async with http:
+        async with streamable_http_client(
+            f"{base_url}/mcp", http_client=http
+        ) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                await session.list_tools()
-                sid = await _first_session_id(rest)
-
-                # Kick off a blocking tool call.
-                call = asyncio.create_task(
-                    session.call_tool("lookup", {"q": "weather"})
-                )
-
-                # Find the pending call via REST and answer it.
-                call_id = None
-                for _ in range(100):
-                    pending = (
-                        await rest.get(f"/api/sessions/{sid}/pending")
-                    ).json()
-                    if pending:
-                        call_id = pending[0]["call_id"]
-                        assert pending[0]["arguments"] == {"q": "weather"}
-                        break
-                    await asyncio.sleep(0.05)
-                assert call_id is not None
-
-                r = await rest.post(
-                    f"/api/calls/{call_id}/respond",
-                    json={"text": "it is sunny"},
-                )
-                assert r.status_code == 200
-
-                result = await asyncio.wait_for(call, timeout=5)
-                assert result.content[0].text == "it is sunny"
-                assert result.is_error is False
+                yield session
 
 
-@pytest.mark.asyncio
-async def test_preset_response(base_url):
-    async with httpx.AsyncClient(base_url=base_url) as rest:
-        await rest.put("/api/tools", json={"tools": [{"name": "ping"}]})
+async def _fake_upstream_session(upstream_url: str) -> str:
+    """A session on the fake upstream exposing `echo` and `ping` overrides."""
+    session = await _create_session(
+        upstream_url,
+        {
+            "tools": [
+                {
+                    "name": "echo",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"msg": {"type": "string"}},
+                    },
+                    "behavior": {
+                        "type": "override",
+                        "response": {"text": "hello from upstream"},
+                    },
+                },
+                {
+                    "name": "ping",
+                    "input_schema": {"type": "object"},
+                    "behavior": {
+                        "type": "override",
+                        "response": {"text": "pong"},
+                    },
+                },
+            ]
+        },
+    )
+    return session["session_id"]
 
-        async with streamable_http_client(f"{base_url}/mcp") as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                await session.list_tools()
-                sid = await _first_session_id(rest)
 
-                await rest.put(
-                    f"/api/sessions/{sid}/tools/ping/preset",
-                    json={"text": "pong", "is_error": False},
-                )
-
-                # With a preset, the call returns immediately (no /respond).
-                result = await asyncio.wait_for(
-                    session.call_tool("ping", {}), timeout=5
-                )
-                assert result.content[0].text == "pong"
+async def _proxy_session(proxy_url: str, upstream_url: str, upstream_sid: str, **extra) -> str:
+    payload = {
+        "upstream": {
+            "url": f"{upstream_url}/mcp",
+            "headers": {"Authorization": f"Bearer {upstream_sid}"},
+        },
+        **extra,
+    }
+    session = await _create_session(proxy_url, payload)
+    return session["session_id"]
 
 
-@pytest.mark.asyncio
-async def test_timeout(base_url):
-    async with httpx.AsyncClient(base_url=base_url) as rest:
-        await rest.put("/api/tools", json={"tools": [{"name": "slow"}]})
+async def test_relay_records_call_on_both_sides(servers):
+    proxy_url, upstream_url = servers
+    upstream_sid = await _fake_upstream_session(upstream_url)
+    proxy_sid = await _proxy_session(proxy_url, upstream_url, upstream_sid)
 
-        async with streamable_http_client(f"{base_url}/mcp") as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                await session.list_tools()
-                sid = await _first_session_id(rest)
-                await rest.put(f"/api/sessions/{sid}/mode", json={"mode": "manual"})
+    async with mcp_client(proxy_url, proxy_sid) as client:
+        tools = await client.list_tools()
+        assert sorted(t.name for t in tools.tools) == ["echo", "ping"]
 
-                # Never respond; default_timeout_s is 5s in the fixture.
-                result = await asyncio.wait_for(
-                    session.call_tool("slow", {}), timeout=15
-                )
-                assert result.is_error is True
-                assert "timed out" in result.content[0].text
+        result = await client.call_tool("echo", {"msg": "hi"})
+        assert result.content[0].text == "hello from upstream"
+        assert not result.is_error
+
+    # The proxy recorded the intercepted call with the agent's arguments.
+    proxy_calls = await _get_calls(proxy_url, proxy_sid)
+    assert len(proxy_calls) == 1
+    assert proxy_calls[0]["tool"] == "echo"
+    assert proxy_calls[0]["arguments"] == {"msg": "hi"}
+    assert proxy_calls[0]["behavior"] == "relay"
+    assert proxy_calls[0]["status"] == "completed"
+
+    # The upstream saw the forwarded call too.
+    upstream_calls = await _get_calls(upstream_url, upstream_sid)
+    assert [c["tool"] for c in upstream_calls] == ["echo"]
+
+
+async def test_session_instructions_served_at_initialize(servers):
+    proxy_url, upstream_url = servers
+    upstream_sid = await _fake_upstream_session(upstream_url)
+    proxy_sid = await _proxy_session(
+        proxy_url,
+        upstream_url,
+        upstream_sid,
+        instructions="You are being tested. Prefer the echo tool.",
+    )
+
+    async with mcp_client(proxy_url, proxy_sid) as client:
+        # `initialize` already ran inside the helper; re-check via a fresh one.
+        pass
+
+    async with mcp_client(proxy_url, proxy_sid) as client:
+        init = client.initialize_result
+        assert init is not None
+        assert init.instructions == "You are being tested. Prefer the echo tool."
+
+
+async def test_override_skips_upstream(servers):
+    proxy_url, upstream_url = servers
+    upstream_sid = await _fake_upstream_session(upstream_url)
+    proxy_sid = await _proxy_session(
+        proxy_url,
+        upstream_url,
+        upstream_sid,
+        tools=[
+            {
+                "name": "echo",
+                "behavior": {
+                    "type": "override",
+                    "response": {"text": "totally canned"},
+                    "delay_s": 0.05,
+                },
+            }
+        ],
+    )
+
+    async with mcp_client(proxy_url, proxy_sid) as client:
+        result = await client.call_tool("echo", {"msg": "hi"})
+        assert result.content[0].text == "totally canned"
+
+    proxy_calls = await _get_calls(proxy_url, proxy_sid)
+    assert proxy_calls[0]["behavior"] == "override"
+    assert proxy_calls[0]["duration_ms"] >= 50.0
+    # The upstream never saw the call.
+    upstream_calls = await _get_calls(upstream_url, upstream_sid)
+    assert upstream_calls == []
+
+
+async def test_inject_renders_placeholders(servers):
+    proxy_url, upstream_url = servers
+    upstream_sid = await _fake_upstream_session(upstream_url)
+    proxy_sid = await _proxy_session(
+        proxy_url,
+        upstream_url,
+        upstream_sid,
+        tools=[
+            {
+                "name": "echo",
+                "behavior": {
+                    "type": "inject",
+                    "template": "{original_text} || you said {args.msg}",
+                },
+            }
+        ],
+    )
+
+    async with mcp_client(proxy_url, proxy_sid) as client:
+        result = await client.call_tool("echo", {"msg": "shoes"})
+        assert result.content[0].text == "hello from upstream || you said shoes"
+
+
+async def test_passthrough_false_and_description_override(servers):
+    proxy_url, upstream_url = servers
+    upstream_sid = await _fake_upstream_session(upstream_url)
+    proxy_sid = await _proxy_session(
+        proxy_url,
+        upstream_url,
+        upstream_sid,
+        passthrough=False,
+        tools=[{"name": "ping", "description": "Only ping. Ask nothing else."}],
+    )
+
+    async with mcp_client(proxy_url, proxy_sid) as client:
+        tools = await client.list_tools()
+        assert [t.name for t in tools.tools] == ["ping"]
+        assert tools.tools[0].description == "Only ping. Ask nothing else."
+
+    # The effective tools view agrees and marks the source.
+    async with httpx.AsyncClient() as rest:
+        r = await rest.get(f"{proxy_url}/api/sessions/{proxy_sid}/tools")
+        assert r.status_code == 200
+        assert r.json() == [
+            {
+                "name": "ping",
+                "description": "Only ping. Ask nothing else.",
+                "source": "overlay",
+                "behavior": {"type": "relay", "response": None, "template": None, "delay_s": 0.0},
+            }
+        ]
+
+
+async def test_put_tools_after_connect_updates_listing(servers):
+    proxy_url, upstream_url = servers
+    upstream_sid = await _fake_upstream_session(upstream_url)
+    proxy_sid = await _proxy_session(proxy_url, upstream_url, upstream_sid)
+
+    async with mcp_client(proxy_url, proxy_sid) as client:
+        tools = await client.list_tools()
+        assert sorted(t.name for t in tools.tools) == ["echo", "ping"]
+
+        async with httpx.AsyncClient() as rest:
+            r = await rest.put(
+                f"{proxy_url}/api/sessions/{proxy_sid}/tools",
+                json={
+                    "tools": [
+                        {
+                            "name": "decoy",
+                            "input_schema": {
+                                "type": "object",
+                                "properties": {"q": {"type": "string"}},
+                            },
+                            "behavior": {
+                                "type": "override",
+                                "response": {"text": "decoy says hi"},
+                            },
+                        }
+                    ]
+                },
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["notified"] is True
+
+        tools = await client.list_tools()
+        assert sorted(t.name for t in tools.tools) == ["decoy", "echo", "ping"]
+
+        result = await client.call_tool("decoy", {"q": "x"})
+        assert result.content[0].text == "decoy says hi"
+
+
+async def test_relay_without_upstream_returns_error(servers):
+    proxy_url, _ = servers
+    sid = (await _create_session(proxy_url, {"tools": [{"name": "echo", "input_schema": {}, "behavior": {"type": "relay"}}]}))["session_id"]
+
+    async with mcp_client(proxy_url, sid) as client:
+        result = await client.call_tool("echo", {"msg": "hi"})
+        assert result.is_error
+        assert "has none" in result.content[0].text
+
+    calls = await _get_calls(proxy_url, sid)
+    assert calls[0]["status"] == "completed"
+    assert calls[0]["response"]["is_error"] is True

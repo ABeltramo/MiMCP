@@ -1,13 +1,17 @@
+"""REST control-plane contract tests (no MCP traffic)."""
+
+from __future__ import annotations
+
 import httpx
 import pytest
 
-from mcp_explorer.app import create_app
-from mcp_explorer.config import Settings
+from mimcp.app import create_app
+from mimcp.config import Settings
 
 
 @pytest.fixture
 def client():
-    app = create_app(Settings(default_timeout_s=2.0))
+    app = create_app(Settings())
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
@@ -21,62 +25,160 @@ async def test_healthz(client):
 
 
 @pytest.mark.asyncio
-async def test_live_dashboard_served(client):
+async def test_create_session_returns_token_and_target(client):
     async with client:
-        r = await client.get("/live")
+        r = await client.post(
+            "/api/sessions",
+            json={
+                "name": "agent-under-test",
+                "instructions": "You are being tested.",
+                "tools": [
+                    {
+                        "name": "echo",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"msg": {"type": "string"}},
+                        },
+                        "behavior": {
+                            "type": "override",
+                            "response": {"text": "canned"},
+                        },
+                    }
+                ],
+            },
+        )
+        assert r.status_code == 201
+        body = r.json()
+        assert body["name"] == "agent-under-test"
+        assert body["status"] == "pending"
+        assert body["instructions"] == "You are being tested."
+        assert body["mcp"]["url"] == "http://test/mcp"
+        assert body["mcp"]["headers"]["Authorization"] == f"Bearer {body['session_id']}"
+
+        # The session shows up in the list and by id.
+        assert any(
+            s["session_id"] == body["session_id"] for s in (await client.get("/api/sessions")).json()
+        )
+        r = await client.get(f"/api/sessions/{body['session_id']}")
         assert r.status_code == 200
-        assert r.headers["content-type"].startswith("text/html")
-        assert "mcp-explorer" in r.text
-        assert "/api/events" in r.text  # the SSE wiring is present
+        assert r.json()["call_count"] == 0
 
 
 @pytest.mark.asyncio
-async def test_set_default_tools_and_list_sessions(client):
+async def test_tool_validation_errors(client):
     async with client:
-        r = await client.put(
-            "/api/tools",
-            json={"tools": [{"name": "echo", "description": "echoes"}]},
+        # Synthetic tool without input_schema (no upstream on the session).
+        r = await client.post(
+            "/api/sessions", json={"tools": [{"name": "needs-schema"}]}
         )
-        assert r.status_code == 200
-        assert r.json() == {"count": 1}
+        assert r.status_code == 422
+        assert "input_schema" in r.json()["detail"]
 
-        r = await client.get("/api/sessions")
-        assert r.status_code == 200
-        assert r.json() == []
+        # Override without a response.
+        r = await client.post(
+            "/api/sessions",
+            json={
+                "tools": [
+                    {
+                        "name": "echo",
+                        "input_schema": {},
+                        "behavior": {"type": "override"},
+                    }
+                ]
+            },
+        )
+        assert r.status_code == 422
+        assert "response" in r.json()["detail"]
+
+        # Inject without a template.
+        r = await client.post(
+            "/api/sessions",
+            json={
+                "tools": [
+                    {
+                        "name": "echo",
+                        "input_schema": {},
+                        "behavior": {"type": "inject"},
+                    }
+                ]
+            },
+        )
+        assert r.status_code == 422
+        assert "template" in r.json()["detail"]
 
 
 @pytest.mark.asyncio
-async def test_get_and_set_instructions(client):
-    async with client:
-        # Defaults to the configured value.
+async def test_instructions_endpoints():
+    app = create_app(Settings(instructions="global default"))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.get("/api/instructions")
-        assert r.status_code == 200
-        assert r.json() == {
-            "instructions": "A controllable MCP server driven at runtime via REST."
-        }
+        assert r.json() == {"instructions": "global default"}
 
         r = await client.put(
-            "/api/instructions", json={"instructions": "Prefer the search tool."}
+            "/api/instructions", json={"instructions": "new global"}
+        )
+        assert r.json() == {"instructions": "new global"}
+
+        # Per-session override while pending, 409 once connected.
+        sid = (await client.post("/api/sessions", json={})).json()["session_id"]
+        r = await client.put(
+            f"/api/sessions/{sid}/instructions",
+            json={"instructions": "per session"},
         )
         assert r.status_code == 200
-        assert r.json() == {"instructions": "Prefer the search tool."}
+        assert (await client.get(f"/api/sessions/{sid}/instructions")).json()[
+            "instructions"
+        ] == "per session"
 
-        r = await client.get("/api/instructions")
-        assert r.json() == {"instructions": "Prefer the search tool."}
+        app.state.registry.get(sid).status = "connected"
+        r = await client.put(
+            f"/api/sessions/{sid}/instructions", json={"instructions": "too late"}
+        )
+        assert r.status_code == 409
 
 
 @pytest.mark.asyncio
 async def test_unknown_session_404(client):
     async with client:
-        r = await client.get("/api/sessions/nope")
-        assert r.status_code == 404
+        assert (await client.get("/api/sessions/nope")).status_code == 404
+        assert (await client.get("/api/sessions/nope/tools")).status_code == 404
+        assert (await client.get("/api/sessions/nope/calls")).status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_respond_to_unknown_call_404(client):
+async def test_calls_endpoints(client):
     async with client:
-        r = await client.post("/api/calls/deadbeef/respond", json={"text": "hi"})
-        assert r.status_code == 404
+        sid = (await client.post("/api/sessions", json={})).json()["session_id"]
+        assert (await client.get(f"/api/sessions/{sid}/calls")).json() == []
+        r = await client.delete(f"/api/sessions/{sid}/calls")
+        assert r.json() == {"session_id": sid, "cleared": 0}
+
+
+@pytest.mark.asyncio
+async def test_delete_session(client):
+    async with client:
+        sid = (await client.post("/api/sessions", json={})).json()["session_id"]
+        assert (await client.delete(f"/api/sessions/{sid}")).status_code == 200
+        assert (await client.get(f"/api/sessions/{sid}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_mcp_mount_rejects_missing_or_unknown_token():
+    app = create_app(Settings())
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", follow_redirects=True
+    ) as client:
+        r = await client.post("/mcp", json={"jsonrpc": "2.0", "method": "initialize"})
+        assert r.status_code == 401
+
+        r = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "initialize"},
+            headers={"X-MiMCP-Session": "not-a-real-token"},
+        )
+        assert r.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -86,7 +188,7 @@ async def test_api_token_guard():
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         # health is unguarded
         assert (await c.get("/api/healthz")).status_code == 200
-        # sessions is guarded
+        # sessions are guarded
         assert (await c.get("/api/sessions")).status_code == 401
         r = await c.get("/api/sessions", headers={"Authorization": "Bearer secret"})
         assert r.status_code == 200
