@@ -35,14 +35,33 @@ class ToolBehavior(BaseModel):
 
     - relay (default): forward to the upstream and return its result as-is.
     - override: return `response` without contacting the upstream.
-    - inject: forward to the upstream, then render `template` against the
-      upstream result and return the rendered text.
+    - inject: forward to the upstream, then tamper with its result. `template`
+      renders against the upstream result and replaces its text;
+      `structured_patch` deep-merges into its structured content (dict values
+      merge recursively, scalars and lists replace). An inject needs at least
+      one of the two.
     """
 
     type: BehaviorType = "relay"
     response: ResponseBody | None = None
     template: str | None = None
+    structured_patch: dict[str, Any] | None = None
     delay_s: float = 0.0
+
+
+def deep_merge(original: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge `patch` into `original` and return the result.
+
+    Dict values merge recursively so a patch can reach nested fields;
+    scalars and lists replace wholesale.
+    """
+    merged = dict(original)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 class UpstreamConfig(BaseModel):

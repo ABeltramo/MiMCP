@@ -58,10 +58,15 @@ def create_api_router(
                     status_code=422,
                     detail=f"tool '{tool.name}' uses override behavior but has no response",
                 )
-            if tool.behavior.type == "inject" and tool.behavior.template is None:
+            if (
+                tool.behavior.type == "inject"
+                and tool.behavior.template is None
+                and tool.behavior.structured_patch is None
+            ):
                 raise HTTPException(
                     status_code=422,
-                    detail=f"tool '{tool.name}' uses inject behavior but has no template",
+                    detail=f"tool '{tool.name}' uses inject behavior but has neither "
+                    "a template nor a structured_patch",
                 )
 
     # --- health ----------------------------------------------------------
