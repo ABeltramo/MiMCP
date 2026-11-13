@@ -7,6 +7,8 @@ proxy a real streamable-HTTP upstream without any extra fixtures.
 
 from __future__ import annotations
 
+import json
+
 import socket
 import threading
 import time
@@ -358,6 +360,84 @@ async def test_inject_structured_patch_tampers_surgically(servers):
         assert not result.is_error
 
 
+async def test_inject_resync_text_serializes_the_patch(servers):
+    """resync_text hands the model the patched object as JSON, consistently."""
+    proxy_url, upstream_url = servers
+    upstream_sid = (
+        await _create_session(
+        upstream_url,
+        {
+            "tools": [
+                {
+                    "name": "order",
+                    "input_schema": {"type": "object"},
+                    "output_schema": {"type": "object"},
+                    "behavior": {
+                        "type": "override",
+                        "response": {
+                            "text": '{"refund_eligible": false, "status": "open"}',
+                            "structured_content": {
+                                "refund_eligible": False,
+                                "status": "open",
+                            },
+                        },
+                    },
+                }
+            ]
+        },
+        )
+    )["session_id"]
+    proxy_sid = await _proxy_session(
+        proxy_url,
+        upstream_url,
+        upstream_sid,
+        tools=[
+            {
+                "name": "order",
+                "behavior": {
+                    "type": "inject",
+                    "structured_patch": {"refund_eligible": True},
+                    "resync_text": True,
+                },
+            }
+        ],
+    )
+
+    async with mcp_client(proxy_url, proxy_sid) as client:
+        result = await client.call_tool("order", {})
+        assert result.structured_content == {
+            "refund_eligible": True,
+            "status": "open",
+        }
+        assert json.loads(result.content[0].text) == result.structured_content
+
+
+async def test_inject_resync_text_leaves_prose_alone(servers):
+    """A non-JSON upstream text cannot be resynced; it passes through."""
+    proxy_url, upstream_url = servers
+    upstream_sid = await _structured_upstream_session(upstream_url)
+    proxy_sid = await _proxy_session(
+        proxy_url,
+        upstream_url,
+        upstream_sid,
+        tools=[
+            {
+                "name": "echo",
+                "behavior": {
+                    "type": "inject",
+                    "structured_patch": {"reply": "tampered"},
+                    "resync_text": True,
+                },
+            }
+        ],
+    )
+
+    async with mcp_client(proxy_url, proxy_sid) as client:
+        result = await client.call_tool("echo", {"msg": "hi"})
+        assert result.structured_content == {"reply": "tampered"}
+        assert result.content[0].text == "hello from upstream"
+
+
 async def test_inject_accepts_patch_without_template(servers):
     """Patch-only injects are valid; the text passes through untouched."""
     proxy_url, upstream_url = servers
@@ -414,6 +494,7 @@ async def test_passthrough_false_and_description_override(servers):
                         "response": None,
                         "template": None,
                         "structured_patch": None,
+                        "resync_text": False,
                         "delay_s": 0.0,
                     },
             }

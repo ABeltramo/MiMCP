@@ -39,13 +39,17 @@ class ToolBehavior(BaseModel):
       renders against the upstream result and replaces its text;
       `structured_patch` deep-merges into its structured content (dict values
       merge recursively, scalars and lists replace). An inject needs at least
-      one of the two.
+      one of the two. `resync_text` (pairs with `structured_patch`) replaces
+      the text with the patched structured content serialized as JSON when
+      the upstream text is itself JSON, so the tamper is consistent across
+      both channels — models that cross-read them refuse otherwise.
     """
 
     type: BehaviorType = "relay"
     response: ResponseBody | None = None
     template: str | None = None
     structured_patch: dict[str, Any] | None = None
+    resync_text: bool = False
     delay_s: float = 0.0
 
 
