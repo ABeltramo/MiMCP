@@ -127,9 +127,6 @@ argument, JSON-encoded when not a string). Unknown placeholders stay literal.
 | `GET /api/sessions/{sid}` | Session detail. |
 | `DELETE /api/sessions/{sid}` | Drop the session and close its upstream. |
 | `PUT /api/sessions/{sid}/name` | Rename a session. |
-| `GET/PUT /api/instructions` | Global default instructions. |
-| `GET /api/sessions/{sid}/instructions` | Effective instructions for a session. |
-| `PUT /api/sessions/{sid}/instructions` | Per-session override; only while `pending` (409 after connect). |
 | `GET /api/sessions/{sid}/tools` | Effective merged tool view. |
 | `PUT /api/sessions/{sid}/tools` | Replace the overlay (optionally switch `upstream`; pass `null` to detach). |
 | `DELETE /api/sessions/{sid}/tools` | Clear the overlay (pure relay). |
@@ -156,8 +153,9 @@ call recording on both sides.
 - Only the tools surface is proxied (list + call). Prompts and resources are
   not relayed.
 - The merged tool list is cached per session until you re-`PUT` the overlay.
-- Instructions reach the agent only at `initialize`; per-session overrides are
-  therefore rejected once the session is `connected` (MCP has no
+- Instructions reach the agent only at `initialize`, so they are set at
+  session creation (`POST /api/sessions`) or via `MIMCP_INSTRUCTIONS`; there
+  is deliberately no instructions endpoint (MCP has no
   instructions-changed notification).
 - Single-process, in-memory state; recordings are capped at
   `MIMCP_MAX_RECORDED_CALLS` per session.

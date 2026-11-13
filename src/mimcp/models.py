@@ -99,10 +99,6 @@ class SetNameRequest(BaseModel):
     name: str
 
 
-class SetInstructionsRequest(BaseModel):
-    instructions: str
-
-
 class RecordedCall(BaseModel):
     """One intercepted tool call, kept for the controller to inspect."""
 

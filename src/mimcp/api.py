@@ -11,7 +11,6 @@ from .models import (
     RecordedCall,
     SessionConfig,
     SessionView,
-    SetInstructionsRequest,
     SetNameRequest,
     SetToolsRequest,
     ToolInfo,
@@ -112,37 +111,6 @@ def create_api_router(
         await upstreams.disconnect(session_id)
         registry.remove(session_id)
         return {"session_id": session_id, "status": "deleted"}
-
-    # --- instructions ----------------------------------------------------
-
-    @router.get("/instructions", dependencies=guard)
-    async def get_instructions() -> dict[str, str]:
-        return {"instructions": mcp.instructions}
-
-    @router.put("/instructions", dependencies=guard)
-    async def set_instructions(body: SetInstructionsRequest) -> dict[str, str]:
-        mcp.set_instructions(body.instructions)
-        return {"instructions": mcp.instructions}
-
-    @router.get("/sessions/{session_id}/instructions", dependencies=guard)
-    async def get_session_instructions(session_id: str) -> dict[str, str]:
-        state = _session_or_404(session_id)
-        effective = state.instructions if state.instructions is not None else mcp.instructions
-        return {"session_id": session_id, "instructions": effective}
-
-    @router.put("/sessions/{session_id}/instructions", dependencies=guard)
-    async def set_session_instructions(
-        session_id: str, body: SetInstructionsRequest
-    ) -> dict[str, str]:
-        state = _session_or_404(session_id)
-        if state.status == "connected":
-            raise HTTPException(
-                status_code=409,
-                detail="the agent already initialized this session and MCP has no "
-                "instructions-changed notification",
-            )
-        state.instructions = body.instructions
-        return {"session_id": session_id, "instructions": state.instructions}
 
     # --- tools -----------------------------------------------------------
 

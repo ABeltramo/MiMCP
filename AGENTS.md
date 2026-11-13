@@ -80,8 +80,9 @@ without reinstalling.
   and pushes `tools/list_changed` via the stored `ServerSession`
   (`MiMCPServer.notify_tools_changed`).
 - **Instructions timing**: the agent receives `instructions` only at
-  `initialize`. Per-session overrides are only accepted while the session is
-  `pending` (the REST plane returns 409 after connect).
+  `initialize`, so they are set at session creation (`POST /api/sessions`) or
+  via `MIMCP_INSTRUCTIONS`; there is deliberately no instructions endpoint
+  (MCP has no instructions-changed notification).
 
 ## Conventions
 

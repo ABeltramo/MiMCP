@@ -342,15 +342,6 @@ class MiMCPServer:
 
     # --- control-plane helpers -------------------------------------------
 
-    @property
-    def instructions(self) -> str:
-        """The current global MCP `instructions` string."""
-        return self.server.instructions or ""
-
-    def set_instructions(self, instructions: str) -> None:
-        """Set the global `instructions` for future initialize handshakes."""
-        self.server.instructions = instructions
-
     async def notify_tools_changed(self, state: SessionState) -> bool:
         """Push tools/list_changed to a session's client, if connected."""
         session = state.server_session

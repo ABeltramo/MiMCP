@@ -108,34 +108,15 @@ async def test_tool_validation_errors(client):
 
 
 @pytest.mark.asyncio
-async def test_instructions_endpoints():
+async def test_instructions_cannot_change_after_connect():
     app = create_app(Settings(instructions="global default"))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.get("/api/instructions")
-        assert r.json() == {"instructions": "global default"}
-
-        r = await client.put(
-            "/api/instructions", json={"instructions": "new global"}
-        )
-        assert r.json() == {"instructions": "new global"}
-
-        # Per-session override while pending, 409 once connected.
+        # There are no instructions endpoints: instructions are set at
+        # session creation (POST /api/sessions) or via MIMCP_INSTRUCTIONS.
+        assert (await client.get("/api/instructions")).status_code == 404
         sid = (await client.post("/api/sessions", json={})).json()["session_id"]
-        r = await client.put(
-            f"/api/sessions/{sid}/instructions",
-            json={"instructions": "per session"},
-        )
-        assert r.status_code == 200
-        assert (await client.get(f"/api/sessions/{sid}/instructions")).json()[
-            "instructions"
-        ] == "per session"
-
-        app.state.registry.get(sid).status = "connected"
-        r = await client.put(
-            f"/api/sessions/{sid}/instructions", json={"instructions": "too late"}
-        )
-        assert r.status_code == 409
+        assert (await client.get(f"/api/sessions/{sid}/instructions")).status_code == 404
 
 
 @pytest.mark.asyncio
