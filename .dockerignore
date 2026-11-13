@@ -1,0 +1,11 @@
+.venv
+.git
+.idea
+.pytest_cache
+.claude
+.mcp.json
+tests
+examples
+*.jsonl
+*.cast
+claude-attack-creation-session.txt
