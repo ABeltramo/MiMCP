@@ -95,10 +95,6 @@ class SetToolsRequest(BaseModel):
     tools: list[SessionToolDef] = Field(default_factory=list)
 
 
-class SetNameRequest(BaseModel):
-    name: str
-
-
 class RecordedCall(BaseModel):
     """One intercepted tool call, kept for the controller to inspect."""
 

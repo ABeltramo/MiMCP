@@ -6,7 +6,6 @@ import mcp.types as types
 
 from mimcp.models import (
     RecordedCall,
-    ResponseBody,
     SessionConfig,
     SessionToolDef,
     ToolBehavior,
@@ -180,12 +179,3 @@ def test_render_unknown_placeholders_stay_literal():
 def test_render_leaves_other_braces_alone():
     rendered = render_template('{"json": true}', original_payload="", original_text="", arguments={})
     assert rendered == '{"json": true}'
-
-
-# --- behavior model -----------------------------------------------------
-
-
-def test_override_body_defaults():
-    behavior = ToolBehavior(type="override")
-    body = behavior.response or ResponseBody(text="fallback", is_error=True)
-    assert body.is_error is True

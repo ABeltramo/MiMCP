@@ -11,7 +11,6 @@ from .models import (
     RecordedCall,
     SessionConfig,
     SessionView,
-    SetNameRequest,
     SetToolsRequest,
     ToolInfo,
     ToolOverlay,
@@ -99,12 +98,6 @@ def create_api_router(
     async def get_session(session_id: str) -> SessionView:
         return _session_view(_session_or_404(session_id))
 
-    @router.put("/sessions/{session_id}/name", dependencies=guard)
-    async def set_name(session_id: str, body: SetNameRequest) -> dict[str, str]:
-        state = _session_or_404(session_id)
-        state.name = body.name
-        return {"session_id": session_id, "name": state.name}
-
     @router.delete("/sessions/{session_id}", dependencies=guard)
     async def delete_session(session_id: str) -> dict[str, str]:
         state = _session_or_404(session_id)
@@ -157,14 +150,6 @@ def create_api_router(
         notified = await mcp.notify_tools_changed(state)
         return {"session_id": session_id, "count": len(body.tools), "notified": notified}
 
-    @router.delete("/sessions/{session_id}/tools", dependencies=guard)
-    async def clear_tools(session_id: str) -> dict[str, object]:
-        state = _session_or_404(session_id)
-        state.overlay = None
-        state.cached_tools = None
-        notified = await mcp.notify_tools_changed(state)
-        return {"session_id": session_id, "notified": notified}
-
     # --- recorded calls --------------------------------------------------
 
     @router.get(
@@ -173,13 +158,6 @@ def create_api_router(
     async def list_calls(session_id: str) -> list[RecordedCall]:
         state = _session_or_404(session_id)
         return list(state.recorded_calls)
-
-    @router.delete("/sessions/{session_id}/calls", dependencies=guard)
-    async def clear_calls(session_id: str) -> dict[str, object]:
-        state = _session_or_404(session_id)
-        count = len(state.recorded_calls)
-        state.recorded_calls.clear()
-        return {"session_id": session_id, "cleared": count}
 
     return router
 

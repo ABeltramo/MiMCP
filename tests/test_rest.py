@@ -128,12 +128,12 @@ async def test_unknown_session_404(client):
 
 
 @pytest.mark.asyncio
-async def test_calls_endpoints(client):
+async def test_calls_endpoint(client):
     async with client:
         sid = (await client.post("/api/sessions", json={})).json()["session_id"]
         assert (await client.get(f"/api/sessions/{sid}/calls")).json() == []
-        r = await client.delete(f"/api/sessions/{sid}/calls")
-        assert r.json() == {"session_id": sid, "cleared": 0}
+        # Clearing a recording means deleting the session; no calls DELETE.
+        assert (await client.delete(f"/api/sessions/{sid}/calls")).status_code == 405
 
 
 @pytest.mark.asyncio

@@ -126,12 +126,9 @@ argument, JSON-encoded when not a string). Unknown placeholders stay literal.
 | `GET /api/sessions` | List sessions (`pending` / `connected`). |
 | `GET /api/sessions/{sid}` | Session detail. |
 | `DELETE /api/sessions/{sid}` | Drop the session and close its upstream. |
-| `PUT /api/sessions/{sid}/name` | Rename a session. |
 | `GET /api/sessions/{sid}/tools` | Effective merged tool view. |
 | `PUT /api/sessions/{sid}/tools` | Replace the overlay (optionally switch `upstream`; pass `null` to detach). |
-| `DELETE /api/sessions/{sid}/tools` | Clear the overlay (pure relay). |
 | `GET /api/sessions/{sid}/calls` | Recorded calls (tool, arguments, behavior, response, duration). |
-| `DELETE /api/sessions/{sid}/calls` | Clear the recording. |
 
 Responses accept `text` (single text block) or `content` (list of MCP content
 blocks), `structured_content`, `is_error`, and `delay_s` (simulated latency,
